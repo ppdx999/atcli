@@ -1,0 +1,269 @@
+#!/bin/sh
+set -eu
+
+usage() {
+    cat <<EOF
+Usage: atcli <command> [options]
+
+Commands:
+    problem ls <contest_id>                   List problem IDs for a contest
+    testcase fetch <contest_id> <problem_id>  Fetch test cases for a problem
+    testcase run <command>                    Run test cases against a command
+
+Options:
+    -h, --help    Show this help message
+
+Environment Variables:
+    ATCODER_SESSION    AtCoder session cookie (REVEL_SESSION value)
+EOF
+}
+
+usage_problem() {
+    cat <<EOF
+Usage: atcli problem <command> [options]
+
+Commands:
+    ls <contest_id>    List problem IDs for a contest
+EOF
+}
+
+usage_testcase() {
+    cat <<EOF
+Usage: atcli testcase <command> [options]
+
+Commands:
+    fetch <contest_id> <problem_id>    Fetch test cases for a problem
+    run <command>                      Run test cases against a command (reads from stdin)
+EOF
+}
+
+# Parse test cases from HTML (stdin) and output in delimiter format
+# Only extracts Japanese version (入力例/出力例) to avoid duplicates
+parse_testcases() {
+    awk '
+    /<h3>入力例/ {
+        type = "INPUT"
+        if (match($0, /<pre>/)) {
+            print "---INPUT---"
+            sub(/.*<pre>/, "")
+            if (/<\/pre>/) {
+                sub(/<\/pre>.*/, "")
+                print
+            } else {
+                in_pre = 1
+                if ($0 != "") print
+            }
+        }
+        next
+    }
+    /<h3>出力例/ {
+        type = "OUTPUT"
+        if (match($0, /<pre>/)) {
+            print "---OUTPUT---"
+            sub(/.*<pre>/, "")
+            if (/<\/pre>/) {
+                sub(/<\/pre>.*/, "")
+                print
+            } else {
+                in_pre = 1
+                if ($0 != "") print
+            }
+        }
+        next
+    }
+    /<\/pre>/ {
+        if (in_pre) {
+            sub(/<\/pre>.*/, "")
+            if ($0 != "") print
+            in_pre = 0
+        }
+        next
+    }
+    in_pre { print }
+    '
+}
+
+# Run test cases from stdin against a command
+run_testcases() {
+    cmd="$1"
+    test_num=0
+    input=""
+    expected=""
+    in_input=0
+    in_output=0
+    passed=0
+    failed=0
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            "---INPUT---")
+                # Run previous test if we have expected output
+                if [ -n "$expected" ]; then
+                    test_num=$((test_num + 1))
+                    actual=$(printf '%s\n' "$input" | sh -c "$cmd" 2>&1) || true
+                    if [ "$actual" = "$expected" ]; then
+                        echo "Test $test_num: Passed"
+                        passed=$((passed + 1))
+                    else
+                        echo "Test $test_num: Failed"
+                        echo "  Input:"
+                        printf '%s\n' "$input" | sed 's/^/    /'
+                        echo "  Expected:"
+                        printf '%s\n' "$expected" | sed 's/^/    /'
+                        echo "  Actual:"
+                        printf '%s\n' "$actual" | sed 's/^/    /'
+                        failed=$((failed + 1))
+                    fi
+                fi
+                in_input=1
+                in_output=0
+                input=""
+                expected=""
+                ;;
+            "---OUTPUT---")
+                in_input=0
+                in_output=1
+                ;;
+            *)
+                if [ "$in_input" -eq 1 ]; then
+                    if [ -n "$input" ]; then
+                        input="$input
+$line"
+                    else
+                        input="$line"
+                    fi
+                elif [ "$in_output" -eq 1 ]; then
+                    if [ -n "$expected" ]; then
+                        expected="$expected
+$line"
+                    else
+                        expected="$line"
+                    fi
+                fi
+                ;;
+        esac
+    done
+
+    # Run the last test case
+    if [ -n "$expected" ]; then
+        test_num=$((test_num + 1))
+        actual=$(printf '%s\n' "$input" | sh -c "$cmd" 2>&1) || true
+        if [ "$actual" = "$expected" ]; then
+            echo "Test $test_num: Passed"
+            passed=$((passed + 1))
+        else
+            echo "Test $test_num: Failed"
+            echo "  Input:"
+            printf '%s\n' "$input" | sed 's/^/    /'
+            echo "  Expected:"
+            printf '%s\n' "$expected" | sed 's/^/    /'
+            echo "  Actual:"
+            printf '%s\n' "$actual" | sed 's/^/    /'
+            failed=$((failed + 1))
+        fi
+    fi
+
+    echo ""
+    echo "Results: $passed passed, $failed failed"
+    [ "$failed" -eq 0 ]
+}
+
+cmd_problem_ls() {
+    if [ $# -eq 0 ]; then
+        echo "Error: contest_id is required" >&2
+        usage_problem >&2
+        exit 1
+    fi
+    contest_id="$1"
+    curl -s "https://atcoder.jp/contests/${contest_id}/tasks" \
+        | grep -oE 'href="/contests/[^/]+/tasks/[^"]+"' \
+        | sed 's|href="/contests/[^/]*/tasks/||; s|"||g' \
+        | sort -u
+}
+
+cmd_testcase_fetch() {
+    if [ $# -lt 2 ]; then
+        echo "Error: contest_id and problem_id are required" >&2
+        usage_testcase >&2
+        exit 1
+    fi
+    contest_id="$1"
+    problem_id="$2"
+    curl -s "https://atcoder.jp/contests/${contest_id}/tasks/${problem_id}" \
+        | parse_testcases
+}
+
+cmd_testcase_run() {
+    if [ $# -eq 0 ]; then
+        echo "Error: command is required" >&2
+        usage_testcase >&2
+        exit 1
+    fi
+    run_testcases "$1"
+}
+
+# Main
+if [ $# -eq 0 ]; then
+    usage
+    exit 1
+fi
+
+case "$1" in
+    -h|--help)
+        usage
+        exit 0
+        ;;
+    problem)
+        shift
+        if [ $# -eq 0 ]; then
+            usage_problem
+            exit 1
+        fi
+        case "$1" in
+            -h|--help)
+                usage_problem
+                exit 0
+                ;;
+            ls)
+                shift
+                cmd_problem_ls "$@"
+                ;;
+            *)
+                echo "Error: Unknown command 'problem $1'" >&2
+                usage_problem >&2
+                exit 1
+                ;;
+        esac
+        ;;
+    testcase)
+        shift
+        if [ $# -eq 0 ]; then
+            usage_testcase
+            exit 1
+        fi
+        case "$1" in
+            -h|--help)
+                usage_testcase
+                exit 0
+                ;;
+            fetch)
+                shift
+                cmd_testcase_fetch "$@"
+                ;;
+            run)
+                shift
+                cmd_testcase_run "$@"
+                ;;
+            *)
+                echo "Error: Unknown command 'testcase $1'" >&2
+                usage_testcase >&2
+                exit 1
+                ;;
+        esac
+        ;;
+    *)
+        echo "Error: Unknown command '$1'" >&2
+        usage >&2
+        exit 1
+        ;;
+esac

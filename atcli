@@ -168,6 +168,15 @@ $line"
     [ "$failed" -eq 0 ]
 }
 
+# curl wrapper that includes session cookie if ATCODER_SESSION is set
+atcoder_curl() {
+    if [ -n "${ATCODER_SESSION:-}" ]; then
+        curl -s -b "REVEL_SESSION=$ATCODER_SESSION" "$@"
+    else
+        curl -s "$@"
+    fi
+}
+
 cmd_problem_ls() {
     if [ $# -eq 0 ]; then
         echo "Error: contest_id is required" >&2
@@ -175,7 +184,7 @@ cmd_problem_ls() {
         exit 1
     fi
     contest_id="$1"
-    curl -s "https://atcoder.jp/contests/${contest_id}/tasks" \
+    atcoder_curl "https://atcoder.jp/contests/${contest_id}/tasks" \
         | grep -oE 'href="/contests/[^/]+/tasks/[^"]+"' \
         | sed 's|href="/contests/[^/]*/tasks/||; s|"||g' \
         | sort -u
@@ -189,7 +198,7 @@ cmd_testcase_fetch() {
     fi
     contest_id="$1"
     problem_id="$2"
-    curl -s "https://atcoder.jp/contests/${contest_id}/tasks/${problem_id}" \
+    atcoder_curl "https://atcoder.jp/contests/${contest_id}/tasks/${problem_id}" \
         | parse_testcases
 }
 

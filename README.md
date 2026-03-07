@@ -98,6 +98,8 @@ atcli_d() {
     problem_id=$(basename "$(pwd)")
     echo "$contest_id/$problem_id のテストケースを取得しています..."
     atcli testcase fetch "$contest_id" "$problem_id" > testcases.txt
+    # 必要であればテストケースの\rを削除
+    sed -i '' 's/\r//g' testcases.txt
     echo  "完了"
 }
 atcli_t() {
